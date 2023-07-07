@@ -5,8 +5,15 @@ import IconHoverEffect from "./IconHoverEffect";
 type LikeButtonProps = {
   likedByMe?: boolean;
   likeCount: number;
+  isLoading: boolean;
+  onClick: () => void;
 };
-function LikeButton({ likedByMe, likeCount }: LikeButtonProps) {
+function LikeButton({
+  likedByMe,
+  likeCount,
+  onClick,
+  isLoading,
+}: LikeButtonProps) {
   const session = useSession();
   const HeartIcon = likedByMe ? VscHeartFilled : VscHeart;
 
@@ -23,6 +30,8 @@ function LikeButton({ likedByMe, likeCount }: LikeButtonProps) {
       className={`group -ml-2 flex items-center gap-1 self-start transition-colors duration-200 ${
         likedByMe ? "text-red-500" : "text-gray-500"
       } hover:text-red-500 focus-visible:text-red-500`}
+      onClick={onClick}
+      disabled={isLoading}
     >
       <IconHoverEffect red>
         <HeartIcon

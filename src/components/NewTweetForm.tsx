@@ -10,6 +10,7 @@ import Button from "./Button";
 import { useSession } from "next-auth/react";
 import { updateTextAreaSize } from "~/config/utils";
 import { api } from "~/utils/api";
+import { Tweet } from "./InfiniteTweetList";
 
 function NewTweetForm() {
   const session = useSession();
@@ -21,10 +22,42 @@ function NewTweetForm() {
     [tweetValueState]
   );
 
+  const trpcUtils = api.useContext();
   const createTweet = api.tweet.create.useMutation({
     onSuccess: (newTweet) => {
-      console.log(newTweet);
       setTweetValueState("");
+
+      if (session.status !== "authenticated") return;
+
+      const updateData: Parameters<
+        typeof trpcUtils.tweet.infiniteFeed.setInfiniteData
+      >[1] = (oldData) => {
+        if (oldData == null || oldData.pages[0] == null) return;
+
+        const newCacheTweet: Tweet = {
+          ...newTweet,
+          likeCount: 0,
+          likedByMe: false,
+          user: {
+            id: session.data.user.id,
+            name: session.data.user.name,
+            image: session.data.user.image,
+          },
+        };
+
+        return {
+          ...oldData,
+          pages: [
+            {
+              ...oldData.pages[0],
+              tweets: [newCacheTweet, ...oldData.pages[0].tweets],
+            },
+            ...oldData.pages.slice(1),
+          ],
+        };
+      };
+
+      trpcUtils.tweet.infiniteFeed.setInfiniteData({}, updateData);
     },
   });
 
