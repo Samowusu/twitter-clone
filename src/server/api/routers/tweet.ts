@@ -1,8 +1,11 @@
+import { Prisma } from "@prisma/client";
+import { inferAsyncReturnType } from "@trpc/server";
 import { z } from "zod";
 import {
   createTRPCRouter,
   publicProcedure,
   protectedProcedure,
+  createTRPCContext,
 } from "~/server/api/trpc";
 
 export const tweetRouter = createTRPCRouter({
@@ -16,6 +19,9 @@ export const tweetRouter = createTRPCRouter({
         },
       });
 
+      // Revalidation
+      void ctx.revalidateSSG?.(`/profiles/${ctx.session.user.id}`);
+
       return createdTweet;
     }),
 
@@ -24,52 +30,28 @@ export const tweetRouter = createTRPCRouter({
       z.object({
         limit: z.number().optional(),
         cursor: z.string().optional(),
+        onlyFollowing: z.boolean().optional(),
       })
     )
-    .query(async ({ ctx, input: { limit = 10, cursor } }) => {
-      const currentUserId = ctx.session?.user.id;
-
-      const tweetList = await ctx.prisma.tweet.findMany({
-        take: limit + 1,
-        cursor: cursor ? { id: cursor } : undefined,
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        select: {
-          id: true,
-          content: true,
-          createdAt: true,
-          _count: { select: { likes: true } },
-          likes:
-            currentUserId == null
-              ? false
-              : { where: { userId: currentUserId } },
-
-          user: {
-            select: { name: true, id: true, image: true },
-          },
-        },
-      });
-
-      let nextCursor: typeof cursor | undefined;
-      if (tweetList.length > limit) {
-        const nextItem = tweetList.pop();
-        if (nextItem != null) {
-          nextCursor = nextItem.id;
-        }
+    .query(
+      async ({ ctx, input: { limit = 10, cursor, onlyFollowing = false } }) => {
+        const currentUserId = ctx.session?.user.id;
+        const fetchTweetsClause =
+          currentUserId == null || !onlyFollowing
+            ? undefined
+            : {
+                user: {
+                  followers: { some: { id: currentUserId } },
+                },
+              };
+        return await getInfiniteTweets({
+          ctx,
+          cursor,
+          limit,
+          whereClause: fetchTweetsClause,
+        });
       }
-
-      const tweets = tweetList.map((tweet: any) => {
-        return {
-          id: tweet.id,
-          content: tweet.content,
-          createdAt: tweet.createdAt,
-          likeCount: tweet._count.likes,
-          user: tweet.user,
-          likedByMe: tweet.likes?.length > 0,
-        };
-      });
-
-      return { tweets, nextCursor };
-    }),
+    ),
 
   toggleLike: protectedProcedure
     .input(z.object({ tweetId: z.string() }))
@@ -88,4 +70,76 @@ export const tweetRouter = createTRPCRouter({
         return { addedLike: false };
       }
     }),
+
+  infiniteProfileFeed: publicProcedure
+    .input(
+      z.object({
+        userId: z.string(),
+        limit: z.number().optional(),
+        cursor: z.string().optional(),
+      })
+    )
+    .query(async ({ input: { limit = 10, userId, cursor }, ctx }) => {
+      return await getInfiniteTweets({
+        limit,
+        ctx,
+        cursor,
+        whereClause: { userId },
+      });
+    }),
 });
+
+type InfinteTweetsParams = {
+  whereClause?: Prisma.TweetWhereInput;
+  limit: number;
+  cursor: string | undefined;
+  ctx: inferAsyncReturnType<typeof createTRPCContext>;
+};
+async function getInfiniteTweets({
+  whereClause,
+  limit,
+  cursor,
+  ctx,
+}: InfinteTweetsParams) {
+  const currentUserId = ctx.session?.user.id;
+
+  const tweetList = await ctx.prisma.tweet.findMany({
+    take: limit + 1,
+    cursor: cursor ? { id: cursor } : undefined,
+    where: whereClause,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: {
+      id: true,
+      content: true,
+      createdAt: true,
+      _count: { select: { likes: true } },
+      likes:
+        currentUserId == null ? false : { where: { userId: currentUserId } },
+
+      user: {
+        select: { name: true, id: true, image: true },
+      },
+    },
+  });
+
+  let nextCursor: typeof cursor | undefined;
+  if (tweetList.length > limit) {
+    const nextItem = tweetList.pop();
+    if (nextItem != null) {
+      nextCursor = nextItem.id;
+    }
+  }
+
+  const tweets = tweetList.map((tweet: any) => {
+    return {
+      id: tweet.id,
+      content: tweet.content,
+      createdAt: tweet.createdAt,
+      likeCount: tweet._count.likes,
+      user: tweet.user,
+      likedByMe: tweet.likes?.length > 0,
+    };
+  });
+
+  return { tweets, nextCursor };
+}
